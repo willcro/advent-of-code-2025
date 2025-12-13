@@ -19,6 +19,48 @@ const machines = lines.map(line => regex.exec(line)).map(it => {
   }
 });
 
+function part1(machine) {
+  let best = Infinity;
+  for (let i = 0; i < Math.pow(2, machine.buttons.length); i++) {
+    const bitmap = i.toString(2).padStart(machine.buttons.length, "0").split("");
+    const buttonIds = bitmap.map((it,j) => it == "1" ? j : null).filter(it => it != null);
+    const option = buttonIds.map(it => machine.buttonsBitmaps[it]).reduce((a, b) => a ^ b, 0);
+    if (option == machine.desiredPattern && buttonIds.length < best) {
+      best = buttonIds.length;
+    }
+  }
+
+  return best;
+}
+
+console.log(machines.map(part1).reduce((a,b) => a + b, 0));
+
+// part 2
+
+/*
+This solution may be insanely overcomplicated. It also only gives the correct answer about 50%
+of the time. 10% of the time it fails, and 40% of the time it is off by 1. Oh well. It has been
+a long time since linear algebra class, and I challenged myself to not look up too much.
+I apologize if I use some words wrong.
+
+For each machine
+1. Attempt to find any solution to the problem using linear algebra
+  1. Create matrix
+  2. Put into echelon form
+  3. Put into reduced row echelon form
+  4. Extract solution
+2. If solution is not whole numbers, shuffle the button order and return to step 1
+3. Find possible reductions
+  1. Try every combination of 3+ buttons to see if the are not linearly independent.
+  2. If they are linearly dependent, record their ratios.
+4. Apply reductions to try to get rid of negative numbers
+5. Apply reductions to try to lower numbers
+6. Repeat entire process a couple times while shuffling to see if that is the best solution
+
+For some reason, row 70 of my input would just not cooperate, and I was too tired to figure out
+why. I just gave up and added step 6.
+*/
+
 function add(matrix, result, coefficient, rowToAdd, rowAddedTo) {
   const adder = matrix[rowToAdd].map(it => it.times(coefficient));
   const newRow = matrix[rowAddedTo].map((it, i) => it.add(adder[i]));
@@ -89,7 +131,7 @@ class Rational {
 }
 
 function printMatrix(matrix) {
-  console.log(matrix.map(row => row.map(cell => cell.toString())))
+  console.log(matrix.map(row => row.map(cell => cell.toString()).join("\t")).join("\n"))
 }
 
 function gcd(a, b) {
@@ -97,6 +139,28 @@ function gcd(a, b) {
     return a;
   }
   return gcd(b, a % b);
+}
+
+function lcm(a, b) {
+  return Math.abs(a) * Math.abs(b) / gcd(a, b);
+}
+
+function lcmAll(arr) {
+  return arr.reduce((a,b) => lcm(a, b), 1);
+}
+
+function reduce(matrix, result, pivots) {
+  const matrixCopy = matrix.map(row => row.map(cell => cell));
+  const resultCopy = result.map(it => it);
+
+  pivots.toReversed().forEach(pivot => {
+    divide(matrixCopy, resultCopy, pivot.y, matrixCopy[pivot.y][pivot.x]);
+    for (let i = pivot.y - 1; i >= 0; i--) {
+      add(matrixCopy, resultCopy, matrix[i][pivot.x].times(new Rational(-1, 1)), pivot.y, i);
+    }
+  });
+
+  return {matrix: matrixCopy, result: resultCopy, pivots};
 }
 
 function solve(matrix, result) {
@@ -109,8 +173,6 @@ function solve(matrix, result) {
 
   // put into echelon form
   while (x < n && y < m) {
-    // printMatrix(matrix)
-    // console.log(x, y);
     if (matrix[y][x].isNegative()) {
       divide(matrix, result, y, new Rational(-1, 1));
     }
@@ -119,99 +181,208 @@ function solve(matrix, result) {
       add(matrix, result, parity, i, y);
     }
 
-    // console.log("after add")
-    // printMatrix(matrix)
-
-
     if (matrix[y][x].isZero()) {
-      x++
+      // pivots.push({x: x, y: y - 1});
+      x++;
       continue;
     }
 
     divide(matrix, result, y, matrix[y][x]);
 
-    // console.log("after divide")
-    // printMatrix(matrix)
-
     for (let i = y + 1; i < m; i++) {
       add(matrix, result, matrix[i][x].times(new Rational(-1, 1)), y, i);
     }
-
-    // console.log("after second add")
-    // printMatrix(matrix)
 
     pivots.push({x,y});
     y++;
     x++
   }
-
-  // reduced row echelon form
+  
   pivots.toReversed().forEach(pivot => {
+    divide(matrix, result, pivot.y, matrix[pivot.y][pivot.x]);
     for (let i = pivot.y - 1; i >= 0; i--) {
       add(matrix, result, matrix[i][pivot.x].times(new Rational(-1, 1)), pivot.y, i);
     }
-  })
+  });
 
-  console.log("in echelon form")
-  printMatrix(matrix);
-
-  console.log(result.map(it => it.toString()))
-
-  if (result.some(it => it.isNegative() || !it.isWholeNumber())) {
+  const strayResults = result.slice(pivots.length).filter(it => !it.isZero()).length;
+  if (strayResults > 0) {
     throw "Unsolvable";
   }
 
-  if (pivots.length < result.filter(it => it != 0).length) {
-    throw "Unsolvable";
-  }
-
-
-
-
-  return {matrix, result, pivots};
+  return {pivots: pivots, result: result.slice(0, pivots.length)};
 }
 
+function convertAndSolve(matrix, result) {
+  const rationalMatrix = matrix.map(row => row.map(cell => new Rational(cell, 1)));
+  const rationalResult = result.map(it => new Rational(it, 1));
+  return solve(rationalMatrix, rationalResult);
+}
 
 function createZeroMatrix(m, n) {
   return [...Array(m)].map(it => [...Array(n)].map(it => new Rational(0, 1)));
 }
 
-function attemptPart2(machine, guess) {
-  const buttons = machine.buttons
-  const matrix = createZeroMatrix(machine.joltages.length + 1, buttons.length);
+function solveMachine(machine) {
+  const buttons = machine.buttons;
+  const matrix = createZeroMatrix(machine.joltages.length, buttons.length);
   buttons.forEach((button, x) => button.forEach((it) => matrix[it][x] = new Rational(1, 1)));
 
-  matrix[matrix.length - 1] = matrix[matrix.length - 1].map(it => new Rational(1, 1));
-
   let result = machine.joltages.map(it => new Rational(it, 1));
-  result.push(new Rational(guess, 1));
-  let out = solve(matrix, result).result.reduce((a,b) => a.add(b), new Rational(0, 1)).getInteger();
+  let solution = solve(matrix, result);
+
+  if (solution.result.some(it => !it.isWholeNumber())) {
+    return null;
+  }
+
+  const reductions = findReductions(machine);
+  const formattedSolution = [...Array(machine.buttons.length)].map(it => it = 0);
+  solution.pivots.forEach((pivot, i) => formattedSolution[pivot.x] = solution.result[i].getInteger());
+
+  return reduceSolution(formattedSolution, reductions);
+}
+
+function reduceSolution(solution, reductions) {
+  // get rid of negatives
+  let negativeness = solution.filter(it => it < 0).reduce((a,b) => a + b, 0);
+  while (negativeness < 0) {
+    let bestNegtiveness = -Infinity;
+    let bestSolution = solution;
+    for (let rid = 0; rid < reductions.length; rid++) {
+      const reduction = reductions[rid];
+      const option = solution.map((it, i) => it + reduction[i]);
+      const optionNegativeness = option.filter(it => it < 0).reduce((a,b) => a + b, 0);
+      if (optionNegativeness > bestNegtiveness) {
+        bestNegtiveness = optionNegativeness;
+        bestSolution = option;
+      }
+    }
+
+    if (bestNegtiveness <= negativeness) {
+      throw "Stuck in negative";
+    }
+
+    solution = bestSolution;
+    negativeness = bestNegtiveness;
+  }
+
+  let totalPresses = solution.reduce((a,b) => a + b, 0);
+  while (true) {
+    let bestPresses = totalPresses;
+    let bestSolution = solution;
+    for (let rid = 0; rid < reductions.length; rid++) {
+      const reduction = reductions[rid];
+      const option = solution.map((it, i) => it + reduction[i]);
+      const optionPresses = option.reduce((a,b) => a + b, 0);
+      const optionNegativeness = option.filter(it => it < 0).reduce((a,b) => a + b, 0);
+      if (optionPresses < bestPresses && optionNegativeness == 0) {
+        bestPresses = optionPresses;
+        bestSolution = option;
+      }
+    }
+
+    if (bestPresses == totalPresses) {
+      return solution;
+    }
+
+    totalPresses = bestPresses;
+    solution = bestSolution;
+  }
+
+  return solution;
+}
+
+const MAX_SHUFFLES = 10;
+function scrambleAndSolve(machine) {
+  for (let i = 0; i < MAX_SHUFFLES; i++) {
+    machine.buttons = machine.buttons.sort((a,b) => Math.random() - 0.5);
+    
+    let result = solveMachine(machine);
+    
+    if (result != null) {
+      return result;
+    }
+    
+
+  }
+  return null;
+}
+
+export function findReductions(machine) {
+  const out = [];
+  for (let i = 0; i < Math.pow(2, machine.buttons.length); i++) {
+    const bitmap = i.toString(2).padStart(machine.buttons.length, "0").split("");
+    const buttonIds = bitmap.map((it,j) => it == "1" ? j : null).filter(it => it != null);
+    if (buttonIds.length < 3) {
+      continue;
+    }
+    const result = [...Array(machine.joltages.length)].map(it => new Rational(0, 1));
+    machine.buttons[buttonIds[0]].forEach(it => result[it] = new Rational(1, 1));
+
+    const rest = buttonIds.slice(1);
+    const matrix = createZeroMatrix(machine.joltages.length, rest.length);
+
+    rest.forEach((buttonId, j) => machine.buttons[buttonId].forEach(it => matrix[it][j] = new Rational(1, 1)));
+
+    try {
+      const solution = solve(matrix, result).result;
+
+      if (solution.some(it => it.isZero()) || solution.length < rest.length) {
+        continue;
+      }
+
+      const solutionLcm = lcmAll(solution.map(it => it.denominator));
+      const reducedSolution = solution.map(it => it.times(new Rational(solutionLcm, 1)).getInteger());
+      const reduction = [...Array(machine.buttons.length)].map(it => 0);
+      rest.forEach((r, j) => {
+        reduction[r] = reducedSolution[j];
+      });
+
+      reduction[buttonIds[0]] = -solutionLcm;
+      out.push(reduction);
+      out.push(reduction.map(it => it * -1));
+    } catch (ex) {
+
+    }
+  }
   return out;
 }
 
-function part2(machine) {
-  let min = machine.joltages.reduce((a,b) => Math.max(a,b), -Infinity);
-  let max = machine.joltages.reduce((a,b) => a + b, 0);
-  for (let guess = min; guess <= max; guess++) {
-    try {
-      console.log(guess)
-      const out = attemptPart2(machine, guess);
-      return out;
-    } catch (ex) {
-      if (ex != "Unsolvable") {
-        throw ex;
-      }
-    }
-  }
+function checkSolution(machine, solution) {
+  const joltages = machine.joltages.map(it => 0);
+  machine.buttons.forEach((button, i) => {
+    button.forEach(it => {
+      joltages[it] += solution[i];
+    })
+  });
 
+  let match = joltages.every((j, i) => machine.joltages[i] == j);
+
+  if (!match) {
+    throw "bad solution";
+  }
 }
 
+// console.log(machines.map(it => scrambleAndSolve(it)).forEach((it, i) => {
+//   if (it == undefined) {
+//     console.log(i);
+//   }
+// }))
 
-// console.log(solve(matrix, result));
+// console.log(checkSolution(machines[1], [ 2, 5, 1, 0, 3, 0 ]))
 
-// console.log(machines.map(it => part2(it)));
-// console.log(attemptPart2(machines[0], 10))
-// console.log(attemptPart2(machines[14], 300))
-console.log(part2(machines[14]))
+// console.log(solveMachine(machines[0]))
 
-// console.log(gcd(1,1))
+const finalResult = machines.map((machine, id) => {
+  // console.log("solving " + id);
+  const solution = scrambleAndSolve(machine);
+  checkSolution(machine, solution);
+  return solution;
+}).flat().reduce((a,b) => a + b, 0);
+
+console.log(finalResult);
+
+// console.log(findReductions(machines[39]))
+
+// before: 16780, 16751
+// after: 16362, 16362, 16362, 16362
